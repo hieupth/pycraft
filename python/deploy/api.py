@@ -1,12 +1,12 @@
-import cv2
 import numpy as np
 import os
 import io
 import pathlib
 import time
+import sys
 
+from functools import partial
 from PIL import Image
-from tqdm import tqdm
 import pdf2image
 from fastapi import *
 from fastapi.staticfiles import StaticFiles
@@ -14,64 +14,93 @@ from fastapi.responses import JSONResponse
 from typing import List
 from pydantic import BaseModel
 
-from vietocr.tool.predictor import Predictor
-from vietocr.tool.config import Cfg
-from ocr.craftdet.detection import Detector
-from ocr.preprocessor.model import DewarpTextlineMaskGuide
-from ocr.utils import bbox2ibox, cv2crop, cv2drawbox
+from dotenv import load_dotenv
+from tritonclient import grpc as grpcclient
+from tritonclient import http as httpclient
+from tritonclient.utils import InferenceServerException
 
+from python.craftdet.utils import client
 
-DEVICE = os.getenv('DEVICE', default="cuda:0")
-IMAGE_SIZE = os.getenv('IMAGE_SIZE', default=224)
-
-
-def ocr_predict(img_rectify, detector, ocr_model, idx, number_images):
-    """idx, number_images: for tqdm progress bar"""
-    texts = []
-    z = detector.detect(img_rectify)
-
-    batch_img_rectify_crop = []
-    for j in tqdm(range(len(z['boxes'])), desc='Process page ({}/{})'.format(idx + 1, number_images)):
-        ib = bbox2ibox(z['boxes'][j])
-        img_rectify_crop = cv2crop(img_rectify, ib[0], ib[1])
-        batch_img_rectify_crop.append(Image.fromarray(img_rectify_crop))
-        img_rectify = cv2drawbox(img_rectify, ib[0], ib[1])
-
-    texts = ocr_model.predict_batch(batch_img_rectify_crop)
-    return img_rectify, texts
-
-##################################
-'''Load checkpoint and weight'''
-
-# OCR
-lsd = cv2.createLineSegmentDetector()
-detector = Detector(
-    craft=os.getcwd() + '/weights/craft/mlt25k.pth',
-    refiner=os.getcwd() + '/weights/craft/refinerCTW1500.pth',
-    use_cuda=True if "cuda" in DEVICE else False
-)
+#############
+# Initialize
+#############
+load_dotenv()
 #
-config = Cfg.load_config_from_name('vgg_transformer')
-config['weights'] = str(os.getcwd() + '/weights/ocr/vgg_transformer.pth')
-config['device'] = DEVICE
-ocr_model = Predictor(config)
+MODEL_NAME    = os.getenv("MODEL_NAME")
+MODEL_VERSION = os.getenv("MODEL_VERSION", "")
+BATCH_SIZE    = int(os.getenv("BATCH_SIZE", 1))
+#
+TRITON_URL           = os.getenv("TRITON_URL", "localhost:8000")
+PROTOCAL      = os.getenv("PROTOCOL", "HTTP")
+VERBOSE       = os.getenv("VERBOSE", "False").lower() in ("true", "1", "t")
+ASYNC_SET     = os.getenv("ASYNC_SET", "False").lower() in ("true", "1", "t")
+#
 
 ##################################
 """Define images app to store image after process"""
-os.makedirs("./prediction", exist_ok=True)
+OUTPUT_DIR = os.getenv('OUTPUT_DIR', default='prediction')
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 ORIGIN_IMAGE_PATH = os.getenv('ORIGIN_IMAGE_PATH', default='origin_images')
-ORIGIN_IMAGE_PATH = pathlib.Path("prediction/" + ORIGIN_IMAGE_PATH)
+ORIGIN_IMAGE_PATH = pathlib.Path(OUTPUT_DIR + "/" + ORIGIN_IMAGE_PATH)
 ORIGIN_IMAGE_PATH.mkdir(exist_ok=True)
 
 OCR_IMAGE_PATH = os.getenv('OCR_IMAGE_PATH', default='ocr_images')
-OCR_IMAGE_PATH = pathlib.Path("prediction/" + OCR_IMAGE_PATH)
+OCR_IMAGE_PATH = pathlib.Path(OUTPUT_DIR + "/" + OCR_IMAGE_PATH)
 OCR_IMAGE_PATH.mkdir(exist_ok=True)
 
 OCR_TEXT_PATH = os.getenv('OCR_TEXT_PATH', default='ocr_text')
-OCR_TEXT_PATH = pathlib.Path("prediction/" + OCR_TEXT_PATH)
+OCR_TEXT_PATH = pathlib.Path(OUTPUT_DIR + "/" + OCR_TEXT_PATH)
 OCR_TEXT_PATH.mkdir(exist_ok=True)
 
+
+############
+# Config
+############
+
+try:
+    if PROTOCAL.lower() == "grpc":
+        # Create gRPC client for communicating with the server
+        triton_client = grpcclient.InferenceServerClient(
+            url=TRITON_URL, verbose=VERBOSE
+        )
+    else:
+        # Specify large enough concurrency to handle the number of requests.
+        concurrency = 20 if ASYNC_SET else 1
+        triton_client = httpclient.InferenceServerClient(
+            url=TRITON_URL, verbose=VERBOSE, concurrency=concurrency
+        )
+except Exception as e:
+    print("client creation failed: " + str(e))
+    sys.exit(1)
+
+try:
+    model_metadata = triton_client.get_model_metadata(
+        model_name=MODEL_NAME, model_version=MODEL_VERSION
+    )
+    model_config = triton_client.get_model_config(
+        model_name=MODEL_NAME, model_version=MODEL_VERSION
+    )
+except InferenceServerException as e:
+    print("failed to retrieve model metadata: " + str(e))
+    sys.exit(1)
+
+if PROTOCAL.lower() == "grpc":
+    model_config = model_config.config
+else:
+    model_metadata, model_config = client.convert_http_metadata_config(
+        model_metadata, model_config
+    )
+
+# parsing information of model
+max_batch_size, input_name, output_name, format, dtype = client.parse_model(
+    model_metadata, model_config
+)
+
+supports_batching = max_batch_size > 0
+if not supports_batching and BATCH_SIZE != 1:
+    print("ERROR: This model doesn't support batching.")
+    sys.exit(1)
 
 class ImageBatchRequest(BaseModel):
     images: List[np.ndarray]
@@ -165,27 +194,27 @@ def craftdet(request: ImageBatchRequest):
     try:
         start_time = time.time()
 
-        if protocol.lower() == "grpc":
+        if PROTOCAL.lower() == "grpc":
             user_data = client.UserData()
             response = triton_client.async_infer(
-                model_name,
+                MODEL_NAME,
                 inputs,
                 partial(client.completion_callback, user_data),
-                model_version=model_version,
+                model_version=MODEL_VERSION,
                 outputs=outputs,
             )
         else:
             async_request = triton_client.async_infer(
-                model_name,
+                MODEL_NAME,
                 inputs,
-                model_version=model_version,
+                model_version=MODEL_VERSION,
                 outputs=outputs,
             )
     except InferenceServerException as e:
         return {"Error": "Inference failed with error: " + str(e)}
 
     # Collect results from the ongoing async requests
-    if protocol.lower() == "grpc":
+    if PROTOCAL.lower() == "grpc":
         (response, error) = user_data._completed_requests.get()
         if error is not None:
             return {"Error": "Inference failed with error: " + str(error)}
@@ -224,7 +253,7 @@ def get_origin():
 
 def requestGenerator(batched_image_data, input_name, output_names, dtype):
     
-    if protocol == "grpc":
+    if PROTOCAL == "grpc":
         client = grpcclient
     else:
         client = httpclient
