@@ -2,9 +2,8 @@ import cv2
 import numpy as np
 import os
 import io
-import torch
-import torch.nn.functional as F
 import pathlib
+import time
 
 from PIL import Image
 from tqdm import tqdm
@@ -74,8 +73,8 @@ OCR_TEXT_PATH = pathlib.Path("prediction/" + OCR_TEXT_PATH)
 OCR_TEXT_PATH.mkdir(exist_ok=True)
 
 
-class ListPathRequest(BaseModel):
-    paths: List[str]
+class ImageBatchRequest(BaseModel):
+    images: List[np.ndarray]
 
 
 #
@@ -124,6 +123,87 @@ async def upload(files: List[UploadFile] = File(...)) -> JSONResponse:
         "message": [file.file.name for file in files]
     }, status_code=status.HTTP_200_OK)
 
+    
+    # for i, img in enumerate(images):
+        
+    #     img_rectify = np.ascontiguousarray(img)
+        
+    #     # predict OCR
+    #     img_ocr, texts = ocr_predict(img_rectify, detector, ocr_model, i, len(images)) 
+
+    #     # save to image api
+    #     cv2.imwrite(f"{ORIGIN_IMAGE_PATH}/{file.filename}_{i}.jpg", np.asarray(img))
+    #     cv2.imwrite(f"{OCR_IMAGE_PATH}/{file.filename}_{i}.jpg", img_ocr)
+    #     with open(f"{OCR_TEXT_PATH}/{file.filename}_content{i}.txt", 'w') as f:
+    #         for line in texts:
+    #             f.write("%s\n" % line)
+
+
+@app.post("/detect")
+async def detect(request: ImageBatchRequest):
+    #TODO: pipeline from upload file to image ocr return
+    # 1. get file from upload
+    # 2. call request to upload api
+    # create folder for each file to save image
+    
+    images = request.images    
+    assert len(images) > 0, "No image found after processing"
+
+    # call request rieng cho tung module
+    
+def vietocr(image):
+    pass
+
+
+
+    
+@app.post("/detect/craftdet")
+def craftdet(request: ImageBatchRequest):
+    #TODO:  
+    inputs, outputs = requestGenerator(request.images, "IMAGE", ["285", "onnx:Conv_275"], np.float32)
+    # Perform inference
+    try:
+        start_time = time.time()
+
+        if protocol.lower() == "grpc":
+            user_data = client.UserData()
+            response = triton_client.async_infer(
+                model_name,
+                inputs,
+                partial(client.completion_callback, user_data),
+                model_version=model_version,
+                outputs=outputs,
+            )
+        else:
+            async_request = triton_client.async_infer(
+                model_name,
+                inputs,
+                model_version=model_version,
+                outputs=outputs,
+            )
+    except InferenceServerException as e:
+        return {"Error": "Inference failed with error: " + str(e)}
+
+    # Collect results from the ongoing async requests
+    if protocol.lower() == "grpc":
+        (response, error) = user_data._completed_requests.get()
+        if error is not None:
+            return {"Error": "Inference failed with error: " + str(error)}
+    else:
+        # HTTP
+        response = async_request.get_result()
+
+    # Process the results    
+    end_time = time.time()
+    print("Process time: ", end_time - start_time)
+    
+    # get output and return response
+    # Get outputs
+    outputs1 = response.as_numpy("boxes")
+    outputs2 = response.as_numpy("boxes_as_ratio")
+    return JSONResponse(content={"boxes": outputs1, "boxes_as_ratio": outputs2})
+
+
 
 @app.get("/ocr")
 def get_ocr():
@@ -141,3 +221,21 @@ def get_origin():
     return {"retify": origin_imgs}
 
 ##################################
+
+def requestGenerator(batched_image_data, input_name, output_names, dtype):
+    
+    if protocol == "grpc":
+        client = grpcclient
+    else:
+        client = httpclient
+
+    # Set the input data
+    inputs = [client.InferInput(input_name, batched_image_data.shape, dtype)]
+    inputs[0].set_data_from_numpy(batched_image_data)
+
+    outputs = [
+        client.InferRequestedOutput(output_names[0], binary_data=True), 
+        client.InferRequestedOutput(output_names[1], binary_data=True)
+    ]
+
+    return inputs, outputs
