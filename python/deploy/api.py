@@ -303,10 +303,8 @@ def requestGenerator(batched_image_data, input_name, output_names, dtype):
 
     return inputs, outputs
 
-def cv2drawboxtext(img: np.ndarray, text, a):
-        
+def cv2drawboxtext(img: np.ndarray, text, a, filename, idx):
     font = ImageFont.truetype("font-times-new-roman/SVN-Times New Roman 2.ttf", 20)
-    # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img_pil = Image.fromarray(img)
     draw = ImageDraw.Draw(img_pil)
     # https://www.blog.pythonlibrary.org/2021/02/02/drawing-text-on-images-with-pillow-and-python/
@@ -315,4 +313,5 @@ def cv2drawboxtext(img: np.ndarray, text, a):
     draw.rectangle(a, fill="yellow", width=2) # draw bbox detection 
     draw.rectangle(bbox, fill="yellow") # draw text detection
     draw.text(a, text, font=font, anchor='ls', fill="black")
+    img_pil.save(f"{OCR_IMAGE_PATH}/{filename}_{idx}.jpg")
     return img
