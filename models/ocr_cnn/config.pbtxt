@@ -1,0 +1,19 @@
+name: ocr_cnn
+backend: "onnxruntime"
+max_batch_size: 0
+
+input [
+    {
+        name: "IMAGE"
+        data_type: TYPE_FLOAT32
+        dims: [ -1, 3, -1, -1 ]
+    }
+]
+
+output [
+    {
+        name: "OUTPUT"
+        data_type: TYPE_FLOAT32
+        dims: [ 1024, -1, 256 ]
+    }
+]
