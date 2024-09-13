@@ -180,8 +180,41 @@ async def detect(request: ImageBatchRequest):
 
     # call request rieng cho tung module
     
-def vietocr(image):
-    pass
+@app.post("/detect/vietocr")
+def vietocr(request: ImageBatchRequest):
+    # image crops
+    inputs, outputs = requestGenerator(request.images, "IMAGE",  ["OUTPUT"], np.float32)
+    # Perform inference
+    if PROTOCAL.lower() == "grpc":
+        user_data = client.UserData()
+        response = triton_client.async_infer(
+            MODEL_NAME,
+            inputs,
+            partial(client.completion_callback, user_data),
+            model_version=MODEL_VERSION,
+            outputs=outputs,
+        )
+    else:
+        async_request = triton_client.async_infer(
+            MODEL_NAME,
+            inputs,
+            model_version=MODEL_VERSION,
+            outputs=outputs,
+        )
+    
+    # Collect results from the ongoing async requests
+    if PROTOCAL.lower() == "grpc":
+        (response, error) = user_data._completed_requests.get()
+        if error is not None:
+            return {"Error": "Inference failed with error: " + str(error)}
+    else:
+        # HTTP
+        response = async_request.get_result()
+    
+    # Process the results
+    # get output and return response
+    outputs = response.as_numpy("SENTENCE")
+    return JSONResponse(content={"sentence": outputs}, status_code=status.HTTP_200_OK)
 
 
 
