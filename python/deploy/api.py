@@ -178,6 +178,21 @@ async def detect(request: ImageBatchRequest):
     
     images = request.images    
     assert len(images) > 0, "No image found after processing"
+    
+    # images one 1 file
+    craftdet_response = craftdet(request)
+    bboxes = craftdet_response.body["boxes"]
+
+    for idx, img in enumerate(images):
+        img_rectify = Image.fromarray(img)
+        batch_img_rectify_crop = [
+            np.array(img_rectify.crop(bboxes[j])) for j in range(len(bboxes))
+        ]
+        batch_texts = vietocr(ImageBatchRequest(images=batch_img_rectify_crop))
+        for j, text in enumerate(batch_texts):
+            cv2drawboxtext(img, text, bboxes[j], "page", j)
+    return JSONResponse(content={"message": "success"}, status_code=status.HTTP_200_OK)
+            
 
     # call request rieng cho tung module
     
