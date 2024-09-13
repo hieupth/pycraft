@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from tritonclient import grpc as grpcclient
 from tritonclient import http as httpclient
 from tritonclient.utils import InferenceServerException
+from PIL import ImageFont, ImageDraw, Image
 
 from python.craftdet.utils import client
 
@@ -301,3 +302,17 @@ def requestGenerator(batched_image_data, input_name, output_names, dtype):
     ]
 
     return inputs, outputs
+
+def cv2drawboxtext(img: np.ndarray, text, a):
+        
+    font = ImageFont.truetype("font-times-new-roman/SVN-Times New Roman 2.ttf", 20)
+    # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_pil = Image.fromarray(img)
+    draw = ImageDraw.Draw(img_pil)
+    # https://www.blog.pythonlibrary.org/2021/02/02/drawing-text-on-images-with-pillow-and-python/
+    bbox = draw.textbbox(a, text, font=font, anchor='ls')
+
+    draw.rectangle(a, fill="yellow", width=2) # draw bbox detection 
+    draw.rectangle(bbox, fill="yellow") # draw text detection
+    draw.text(a, text, font=font, anchor='ls', fill="black")
+    return img
