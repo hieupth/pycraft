@@ -1,0 +1,24 @@
+name: retinet
+backend: "onnxruntime"
+max_batch_size: 0
+
+input [
+    {
+        name: "onnx::Transpose_0"
+        data_type: TYPE_FLOAT32
+        dims: [ -1, 512, 512, 2 ]
+    },
+    {
+        name: "onnx::Concat_1"
+        data_type: TYPE_FLOAT32
+        dims: [ -1, 32, 512, 512 ]
+    }
+]
+
+output [
+    {
+        name: "129"
+        data_type: TYPE_FLOAT32
+        dims: [ -1, 512, 512, 1 ]
+    }
+]
